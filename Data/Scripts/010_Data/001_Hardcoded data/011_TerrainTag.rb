@@ -17,6 +17,7 @@ module GameData
     attr_reader :ice
     attr_reader :bridge
     attr_reader :shows_reflections
+    attr_reader :fake_reflections
     attr_reader :must_walk
     attr_reader :ignore_passability
 
@@ -56,6 +57,7 @@ module GameData
       @ice                    = hash[:ice]                    || false
       @bridge                 = hash[:bridge]                 || false
       @shows_reflections      = hash[:shows_reflections]      || false
+      @fake_reflections       = hash[:fake_reflections]       || false
       @must_walk              = hash[:must_walk]              || false
       @ignore_passability     = hash[:ignore_passability]     || false
     end
@@ -106,6 +108,7 @@ GameData::TerrainTag.register({
   :can_fish               => true,
   :can_dive               => true,
   :battle_environment     => :MovingWater
+  :fake_reflections       => true
 })
 
 GameData::TerrainTag.register({
@@ -123,6 +126,7 @@ GameData::TerrainTag.register({
   :can_surf               => true,
   :can_fish               => true,
   :battle_environment     => :MovingWater
+  :fake_reflections       => true
 })
 
 GameData::TerrainTag.register({

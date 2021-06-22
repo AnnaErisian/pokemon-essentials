@@ -502,8 +502,13 @@ class CustomTilemap
       getAutotile(sprite,id)
     end
     terrain_tag_data = GameData::TerrainTag.try_get(terrain)
+	
     if terrain_tag_data.shows_reflections
-      spriteZ = -100
+      if terrain_tag_data.fake_reflections
+        spriteZ = -25
+      else
+        spriteZ = -100
+      end
     elsif $PokemonGlobal.bridge > 0 && terrain_tag_data.bridge
       spriteZ = 1
     else
