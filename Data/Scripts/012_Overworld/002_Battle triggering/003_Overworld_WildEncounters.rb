@@ -202,9 +202,9 @@ class PokemonEncounters
     return false if $PokemonTemp.forceSingleBattle
     return false if pbInSafari?
     return true if $PokemonGlobal.partner
-    return false if $Trainer.able_pokemon_count <= 1
-    return true if $game_player.pbTerrainTag.double_wild_encounters && rand(100) < 30
-    return false
+    return false if $Trainer.pokemon_count <= 1
+    # return true if $game_player.pbTerrainTag.double_wild_encounters && rand(100) < 30
+    return true
   end
 
   # Checks the defined encounters for the current map and returns the encounter
@@ -287,6 +287,57 @@ class PokemonEncounters
         enc_list = new_enc_list if new_enc_list.length > 0
       end
     end
+    
+    ##BEGIN Fishing Plus Lure Calculations
+    if GameData::EncounterType.get(enc_type).type == :fishing
+      #Ancient Anchor - A heavy lure that reaches the abyss.  Increases rate of Rock, Ground, and Steel type Pokemon.
+      #Static Chain - A mechanical lure that has a slight heat and charge when it moves through the water.  Increases rate of Fire, Ice, Electric, Psychic, and Fairy type Pokemon.
+      #Infusion Mesh - A porous lure filled with an pungent.  Increases rate of Poison, Grass, Bug, Dark, and Ghost type Pokemon.
+      favored_types = []
+      case FishingPlus.currentLure
+      when :LUREANCHOR
+        favored_types << :STEEL if GameData::Type.exists?(:STEEL)
+        favored_types << :GROUND if GameData::Type.exists?(:GROUND)
+        favored_types << :ROCK if GameData::Type.exists?(:ROCK)
+      when :LURESTATIC
+        favored_types << :FIRE if GameData::Type.exists?(:FIRE)
+        favored_types << :ICE if GameData::Type.exists?(:ICE)
+        favored_types << :ELECTRIC if GameData::Type.exists?(:ELECTRIC)
+        favored_types << :PSYCHIC if GameData::Type.exists?(:PSYCHIC)
+        favored_types << :FAIRY if GameData::Type.exists?(:FAIRY)
+      when :LUREINFUSE
+        favored_types << :POISON if GameData::Type.exists?(:POISON)
+        favored_types << :GRASS if GameData::Type.exists?(:GRASS)
+        favored_types << :BUG if GameData::Type.exists?(:BUG)
+        favored_types << :DARK if GameData::Type.exists?(:DARK)
+        favored_types << :GHOST if GameData::Type.exists?(:GHOST)
+      end
+      if favored_types.length > 0
+        new_enc_list = []
+        enc_list.each do |enc|
+          species_data = GameData::Species.get(enc[1])
+          t1 = species_data.type1
+          t2 = species_data.type2
+          new_enc_list.push(enc) if favored_types.include?(t1) || favored_types.include?(t2)
+        end
+        enc_list = new_enc_list if new_enc_list.length > 0
+      end
+      
+      #Crystal Bauble - A transparent gem that reflects the purity of water.  Increases rate of purely Water type Pokemon.
+      if FishingPlus == :LURECRYSTAL && GameData::Type.exists?(:WATER)
+        new_enc_list = []
+        enc_list.each do |enc|
+          species_data = GameData::Species.get(enc[1])
+          t1 = species_data.type1
+          t2 = species_data.type2
+          new_enc_list.push(enc) if t1 == :WATER && t2 == :WATER
+        end
+        enc_list = new_enc_list if new_enc_list.length > 0
+      end
+    end
+    ##END Fishing Plus Lure Calculations
+
+    
     enc_list.sort! { |a, b| b[0] <=> a[0] }   # Highest probability first
     # Calculate the total probability value
     chance_total = 0

@@ -302,3 +302,20 @@ Land,21
     10,PIKACHU,11,14
     10,SANDSHREW_1,11,14
     10,VULPIX_1,11,14
+#-------------------------------
+[022] # Fishtest
+ProgressPole
+    20,POLIWAG,18,20
+    20,SEEL,18,20
+    15,KRABBY,17,21
+    10,SHELLDER,18,19
+    10,SQUIRTLE,18,19
+BambooRod
+    20,CHINCHOU,17,21
+    20,CLAMPERL,18,20
+    20,SHELLDER,18,20
+AquaRuler
+    10,GYARADOS,17,21
+    15,CORSOLA,19,24
+    20,RELICANTH,16,19
+    30,WAILMER,16,19

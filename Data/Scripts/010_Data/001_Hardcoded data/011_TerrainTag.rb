@@ -107,7 +107,8 @@ GameData::TerrainTag.register({
   :can_surf               => true,
   :can_fish               => true,
   :can_dive               => true,
-  :battle_environment     => :MovingWater
+  :battle_environment     => :MovingWater,
+  :shows_reflections      => true,
   :fake_reflections       => true
 })
 
@@ -125,7 +126,8 @@ GameData::TerrainTag.register({
   :id_number              => 7,
   :can_surf               => true,
   :can_fish               => true,
-  :battle_environment     => :MovingWater
+  :battle_environment     => :MovingWater,
+  :shows_reflections      => true,
   :fake_reflections       => true
 })
 

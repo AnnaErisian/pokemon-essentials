@@ -113,6 +113,11 @@ MapPosition = 0,14,8
 BattleBack = field
 MapSize = 1,11
 #-------------------------------
+[022]
+# Fishtest
+Outdoor = true
+Bicycle = true
+#-------------------------------
 [023]
 # Lerucean Town
 Outdoor = true
