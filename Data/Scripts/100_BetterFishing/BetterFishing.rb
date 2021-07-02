@@ -21,6 +21,10 @@ GameData::EncounterType.register({
 })
 
 class FP_Entity
+
+  attr_accessor :position
+  attr_accessor :angle
+
   def initialize(shape, speed)
     @sprite = SpriteWrapper.new(Spriteset_Map.viewport)
     setSpriteBitmap(shape)
@@ -29,14 +33,13 @@ class FP_Entity
     
     @speed = speed
     
-    @x = Graphics.width/2
-    @y = Graphics.height/2
+    @position = Vector.new(Graphics.width/2, Graphics.height/2)
     @angle = 0
   end
   
   def tick()
-    @sprite.x = @x
-    @sprite.y = @y
+    @sprite.x = @position.x
+    @sprite.y = @position.y
     @sprite.angle = @angle
   end
   
@@ -45,6 +48,10 @@ class FP_Entity
     @sprite.bitmap = entityBitmap
     @sprite.ox = entityBitmap.width / 2
     @sprite.oy = entityBitmap.height / 2
+  end
+  
+  def canMoveToV(v)
+    return canMoveTo(v.x, v.y)
   end
   
   def canMoveTo(x, y)
@@ -56,11 +63,17 @@ class FP_Entity
     return $game_map.terrain_tag(rx, ry).can_fish
   end
   
+  def tryMoveV(v)
+    return tryMove(v.x, v.y)
+  end
+  
   def tryMove(x, y)
     if canMoveTo(x, y)
-      @x = x
-      @y = y
+      @position.x = x
+      @position.y = y
+      return true
     end
+    return false
   end
   
   def die()
@@ -70,85 +83,165 @@ end
 
 class FP_Fish < FP_Entity
 
+  attr_writer :bobber
+
   def initialize(shape, speed, species, level)
     super(shape, speed)
     @species = species
     @level = level
+    
+    initKinematics()
+    initAi()
   end
   
   def tick()
     ai()
+    kinematics()
     super()
+  end
+    
+  @@DRAG = 0.95
+  @@ANGLE_DRAG = 0.95
+  
+  def initKinematics()
+    @velocity = Vector.new(0.0, 0.0)
+    @v_angle = 0.0
+    @could_move = true
+  end
+  
+  def initAi()
+    @target_pos = nil
+    @target_angle = 0
+    @bobber = nil
+  end
+  
+  def kinematics()
+    #update position
+    @angle = (@angle+@v_angle) % 360
+    @could_move = tryMoveV(@position + @velocity)
+    
+    #apply drag
+    @v_angle *= @@ANGLE_DRAG
+    @velocity *= if @velocity.mag > 0.01 then @@DRAG else 0 end
   end
   
   def ai()
-    @angle = (@angle+@speed/2.5) % 360
-    tryMove(@sprite.x + @speed * (rand-0.5), @sprite.y + @speed * (rand-0.5))
+    #pick a target position if we don't have one
+    if !@bobber.nil? && @bobber.state == FP_Bobber::BOBBER
+      @target_pos = @bobber.position
+    else
+      randomSeek()
+    end
+    #move towards target point
+    if @target_pos != nil
+      #echoln("Current Position: #{@position.x.round(3)}, #{@position.y.round(3)}")
+      #echoln("Target Position:  #{@target_pos.x.round(3)}, #{@target_pos.y.round(3)}")
+      target_v = @target_pos - @position
+      target_v.normalize!
+      target_v *= @speed
+      #echoln("Target Velocity: #{target_v.x.round(3)}, #{target_v.y.round(3)}")
+      steering_dir = target_v - @velocity
+      steering_dir.normalize!
+      #echoln("Steering Vector: #{steering_dir.x.round(3)}, #{steering_dir.y.round(3)}")
+      @velocity += steering_dir * @speed / 30.0
+      #echoln("Velocity: #{@velocity.x.round(3)}, #{@velocity.y.round(3)}")
+    end
+    #just make angle match current velocity
+    if @velocity.mag != 0
+      target_angle = 360 - ((@velocity.angleR + Math::PI) * 360 / (2*Math::PI))
+      diff = Math.abs(@angle-target_angle)
+      angle_accel = 0
+      if Math.abs(diff) > 10
+        if(diff < 180)
+          angle_accel = if target_angle > @angle then 1 else -1 end
+        else
+          angle_accel = if target_angle > @angle then -1 else 1 end
+        end
+      end
+      @v_angle += angle_accel
+      
+    end
+    #if we're super near the target, drop the target
+    if @target_pos != nil
+      if (@target_pos - @position).mag < 10
+        @target_pos = nil
+      end
+    end
+  end
+  
+  def randomSeek()
+    if !@could_move || @target_pos == nil
+      if rand(100) < 5
+        @target_pos = @position + Vector.new(rand(100)-rand(100), rand(100)-rand(100))
+      end
+    end
   end
 end
 
 class FP_Bobber < FP_Entity
   
-  @@CURSOR = 0
-  @@BOBBER = 1
-  @@CATCHING = 2
+  CURSOR = 0
+  BOBBER = 1
+  CATCHING = 2
   
-  @@ACCELERATION = 0.5
-  @@DRAG = 0.9
+  attr_reader :state
+  
+  @@ACCELERATION = 0.4
+  @@DRAG = 0.93
   
   def initialize(shape, speed)
     super(shape, speed)
-    @state = @@CURSOR
-    @velocity_x = 0
-    @velocity_y = 0
+    @state = CURSOR
+    @velocity = Vector.new(0, 0)
     @angle = 0
-    @maxSpeed = @speed * @speed
+    @maxSpeed2 = @speed * @speed
   end
   
   def tick()
   
     #Apply drag
-    @velocity_x *= @@DRAG
-    @velocity_y *= @@DRAG
-    if @velocity_x.abs() < 0.05
-      @velocity_x = 0
-    end
-    if @velocity_y.abs() < 0.05
-      @velocity_y = 0
+    @velocity *= @@DRAG
+    if @velocity.mag2 < 0.03
+      @velocity *= 0
     end
   
     if Input.press?(Input::UP)
-      @velocity_y -= @@ACCELERATION
+      @velocity.y -= @@ACCELERATION
     end
     if Input.press?(Input::DOWN)
-      @velocity_y += @@ACCELERATION
+      @velocity.y += @@ACCELERATION
     end
     if Input.press?(Input::LEFT)
-      @velocity_x -= @@ACCELERATION
+      @velocity.x -= @@ACCELERATION
     end
     if Input.press?(Input::RIGHT)
-      @velocity_x += @@ACCELERATION
+      @velocity.x += @@ACCELERATION
     end
     
     #Limit to @speed
-    vsquared = @velocity_y * @velocity_y + @velocity_x * @velocity_x
-    if (vsquared) > @maxSpeed
-      @velocity_x *= @maxSpeed / vsquared
-      @velocity_y *= @maxSpeed / vsquared
+    if (@velocity.mag2) > @maxSpeed2
+      @velocity *= @maxSpeed2 / @velocity.mag2
     end
     
-    #Move
-    tryMove(@x + @velocity_x, @y + @velocity_y)
+    #Move, bounce if we can't
+    if !tryMoveV(@position + @velocity)
+      if !tryMove(@position.x + @velocity.x, @position.y)
+        @velocity.x *= -1
+      end
+      if !tryMove(@position.x, @position.y + @velocity.y)
+        @velocity.y *= -1
+      end
+    end
     
     ##update position for real
     super()
     
     if Input.trigger?(Input::USE)
-      if @state == @@CURSOR
+      if @state == CURSOR
         setSpriteBitmap("bobber")
-        @state = @@BOBBER
+        @state = BOBBER
         pbFishingBegin
-      elsif @state == @@BOBBER
+      elsif @state == BOBBER
         return true
       end
     end
@@ -243,6 +336,10 @@ def fishingPlus(fishCount)
   
   bobber = FP_Bobber.new("cursor", 5000)
   
+  fish.each do |f|
+    f.bobber = bobber
+  end
+    
   loop do
     Graphics.update
     Input.update
