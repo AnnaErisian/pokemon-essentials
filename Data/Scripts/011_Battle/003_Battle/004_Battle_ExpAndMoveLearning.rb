@@ -124,13 +124,26 @@ class PokeBattle_Battle
     exp = (exp*1.5).floor if trainerBattle?
     # Scale the gained Exp based on the gainer's level (or not)
     if Settings::SCALED_EXP_FORMULA
-      exp /= 5
-      levelAdjust = (2*level+10.0)/(pkmn.level+level+10.0)
-      levelAdjust = levelAdjust**5
-      levelAdjust = Math.sqrt(levelAdjust)
-      exp *= levelAdjust
-      exp = exp.floor
-      exp += 1 if isPartic || hasExpShare
+      #replace the scaling function with one that's even more aggressive
+      #particularly in that it scales harder at higher levels even with the same difference
+      #exp /= 5
+      #levelAdjust = (2*level+10.0)/(pkmn.level+level+10.0)
+      #levelAdjust = levelAdjust**5
+      #levelAdjust = Math.sqrt(levelAdjust)
+      #exp *= levelAdjust
+      #exp = exp.floor
+      #exp += 1 if isPartic || hasExpShare
+      exp /= 7
+      if pkmn.level > level #we are stronger
+        [pkmn.level - level, 10].max.times do
+          exp /= 1.5
+        end
+      elsif level > pkmn.level #we are weaker
+        [level - pkmn.level, 10].min.times do
+          exp *= 1.25
+        end
+      end
+      exp = exp.floor + 1
     else
       exp /= 7
     end
