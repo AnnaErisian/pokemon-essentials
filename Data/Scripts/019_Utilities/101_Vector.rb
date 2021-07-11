@@ -31,7 +31,7 @@ class Vector
   end
   
   def normalize!
-    r = Math.sqrt(@x*@x+@y*@y)
+    r = magnitude
     return if r == 0
     @x /= r
     @y /= r
@@ -73,4 +73,11 @@ class Vector
     return Math.atan2(@y, @x)
   end
   
+  def distance(other)
+    return (self-other).magnitude
+  end
+  
+  def to_s
+    return "x: %.2f, y: %.2f" % [@x, @y]
+  end
 end

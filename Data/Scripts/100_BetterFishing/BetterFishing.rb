@@ -24,6 +24,7 @@ class FP_Entity
 
   attr_accessor :position
   attr_accessor :angle
+  attr_accessor :sprite
 
   def initialize(shape, speed)
     @sprite = SpriteWrapper.new(Spriteset_Map.viewport)
@@ -84,96 +85,359 @@ end
 class FP_Fish < FP_Entity
 
   attr_writer :bobber
+  attr_reader :hooked
+  attr_accessor :watchingBobber
+  attr_accessor :interest
 
   def initialize(shape, speed, species, level)
     super(shape, speed)
     @species = species
     @level = level
+    @hooked = false
     
     initKinematics()
     initAi()
+    
+    case shape
+      #Fish and Spinies
+      when "fish"
+        @angleAdjustor = FP_Angle_Adjustors::Oscillate.new(5)
+      when "spiny"
+        @angleAdjustor = FP_Angle_Adjustors::Oscillate.new(7)
+      #Blobs
+      when "blob"
+        @angleAdjustor = FP_Angle_Adjustors::RandomSlow.new()
+      #Snakes, Others
+      else
+        @angleAdjustor = FP_Angle_Adjustors::NoOp.new()
+    end
   end
   
   def tick()
     ai()
     kinematics()
+    #testHUD()
     super()
+    angleAdjust()
   end
-    
+  
+  def angleAdjust()
+    @angleAdjustor.adjust(@sprite, @velocity)
+  end
+  
+  @@ANGLE_FORCE_MAX = 1
+  @@ANGLE_SPEED_MAX = 4
+  
+  @@ACCEL_MAX = 5.0
+  @@CAUTION_SPEED_MAX = 0.5
+  
   @@DRAG = 0.95
-  @@ANGLE_DRAG = 0.95
+  @@ANGLE_DRAG = 0.98
   
   def initKinematics()
     @velocity = Vector.new(0.0, 0.0)
     @v_angle = 0.0
     @could_move = true
+    @reach_scale = 10
   end
   
   def initAi()
+    @other_fish = []
     @target_pos = nil
+    @target_time = -1
     @target_angle = 0
     @bobber = nil
+    @sightRange = 30
+    @watchingBobber = false
+    @interest = 0
+    @interestGrowth = 10.1
+    @interestDecay = 0.1
+    @interestDecayFear = 1.5
+    @bobberVelLimit = 0.3
+    @bobberWary = 0
+    @bobberWaryGrowth = 0.2
+    @bobberWaryDecay = 0.05
+    @caution = false
+    @bobberSeekSpreadTimer = 0
+    @seekingBobber = false
+    @stun = 0
+  end
+  
+  def testHUD()
+    if @HUDSprite == nil
+      @HUDBitmap = Bitmap.new(150, 150)
+      @HUDSprite = SpriteWrapper.new(Spriteset_Map.viewport)
+      @HUDSprite.visible=true
+      @HUDSprite.bitmap=@HUDBitmap
+      @HUDSprite.z=-19
+    end
+    @HUDBitmap.clear()
+    @HUDBitmap.draw_text(0, 0, 150, 5, "Interest: %d" % [@interest])
+    @HUDBitmap.draw_text(0, 10, 150, 5, "Wary: %d" % [@bobberWary])
+    @HUDBitmap.draw_text(0, 20, 150, 5, "Watching: %s" % [@watchingBobber])
+    @HUDBitmap.draw_text(0, 30, 150, 5, "T Time: %d" % [@target_time])
+    @HUDSprite.x = @position.x
+    @HUDSprite.y = @position.y
+  end
+  
+  def setOtherFish(others)
+    others.each do |o|
+      @other_fish << o if o != self
+    end
+    echoln(@other_fish.length)
   end
   
   def kinematics()
     #update position
     @angle = (@angle+@v_angle) % 360
     @could_move = tryMoveV(@position + @velocity)
+    if !@could_move
+      @could_move = tryMove(@position.x + @velocity.x, @position.y)
+    end
+    if !@could_move
+      @could_move = tryMove(@position.x, @position.y + @velocity.y)
+    end
     
     #apply drag
-    @v_angle *= @@ANGLE_DRAG
+    @v_angle *= if Math.abs(@v_angle) > 0.02 then @@ANGLE_DRAG else 0 end
+    @v_angle = Math.clamp(-@@ANGLE_SPEED_MAX, @v_angle, @@ANGLE_SPEED_MAX)
     @velocity *= if @velocity.mag > 0.01 then @@DRAG else 0 end
   end
   
   def ai()
-    #pick a target position if we don't have one
-    if !@bobber.nil? && @bobber.state == FP_Bobber::BOBBER
-      @target_pos = @bobber.position
-    else
-      randomSeek()
+    aiTargeting()
+#		Move towards target
+    angularSteering()
+    @target_time -= 1 if @target_time >= 0
+    @stun -= 1 if @stun > 0
+    setTarget(nil) if @target_time == 0
+    if @target_pos != nil
+      if @target_pos.distance(@position) < @reach_scale
+#   		If target reached
+# 			clear target
+        if @interest > 99999999999 && @seekingBobber
+# 			  if interest >99 and it's the bobber, bite!
+          @hooked = true
+        elsif  @interest > 25 && @seekingBobber
+# 			  if interest >25 and it's the bobber, bounce and ripple
+          if @target_pos.distance(@bobber.position) < 5
+            angleR = (@angle-90)*2*Math::PI/360.0
+            @velocity += Vector.new(-3*Math.sin(angleR), -3*Math.cos(angleR))
+            @stun = 60
+            @bobber.fishTap
+          end
+        end
+        setTarget(nil)
+        @target_time = -1
+        @caution = false
+      end
     end
-    #move towards target point
+  end
+  
+  def aiTargeting()
+    bobberDist = @bobber.nil? ? 10000 : @bobber.position.distance(@position)
+    if !@bobber.nil? && @bobber.state == FP_Bobber::BOBBER && (bobberDist < @sightRange || (@watchingBobber && bobberDist < 3*@sightRange))
+      @watchingBobber = true
+#     Check if there's another fish also interested.  If they're more interested, fuck off
+      if @target_pos == nil
+        otherInterested = @other_fish.find {|i| i.watchingBobber}
+        if !otherInterested.nil? && otherInterested.interest >= @interest
+          @watchingBobber = false
+          randomSeek(40, 60, 100)
+          return
+        end
+      end
+#     If the bobber is near
+#     their 'interest' (0-100, at 100 they go for a bite) grows 1/2frames
+      @interest += @interestGrowth
+#	    If the bobber is moving
+      if @bobber.velocity.mag > @bobberVelLimit
+#	  	  Increment bobber wary counter
+        @bobberWary += @bobberWaryGrowth
+        if @bobberWary < 20
+#				  If the counter is < 1 second, grant +interest
+          @interest += @interestGrowth
+        else
+#				  Else reduce interest by 5% of current, then by 3
+          @interest *= 0.95
+          @interest = Math.max(0, @interest - 6 * @interestDecay)
+        end
+      else
+#    		Else reduce the counter by 2, min 0
+        @bobberWary = Math.max(0, @bobberWary - @bobberWaryDecay)
+      end
+      @bobberSeekSpreadTimer = Math.max(0, @bobberSeekSpreadTimer-1)
+      if @interest > 25
+        if rand(100) < 2 && @bobberSeekSpreadTimer < 1
+#   			If interest >25, target bobber and apply caution
+          setTarget(@bobber.position)
+          @seekingBobber = true
+          @target_time = 240
+          @bobberSeekSpreadTimer = 300
+          @caution = true
+        else
+          if @target_pos.nil?
+            randomSeek(20, 30)
+          end
+        end
+      elsif @interest <= 0
+#   	  If interest <0, target away from bobber, or totally random if that fails
+        @caution = false
+        flee_center = @position - (@bobber.position - @position).normalize * 50
+        seekScale = 30
+        r1 = rand(2*seekScale) - seekScale
+        r2 = rand(2*seekScale) - seekScale
+        flee_center += Vector.new(r1,r2)
+        if canMoveToV(flee_center)
+          setTarget(flee_center)
+          return
+        else
+        randomSeek()
+        end
+      else
+        if @target_pos == nil
+          randomSeek()
+        end
+      end
+    else    
+      @watchingBobber = false
+      @interest = Math.max(0, @interest - @interestDecay)
+      @bobberWary = Math.max(0, @bobberWary - 4*@bobberWaryGrowth)
+      @caution = false
+#		  Else if no target and 4% chance, target random water tile
+      if @target_pos == nil
+        randomSeek()
+      end
+    end
+  end
+  
+  #steering that adjust our angle and moves forward
+  def angularSteering
+    if @target_pos != nil
+      #move our angle towards the right direction
+      target_angle = 360 - (((@target_pos - @position).angleR + Math::PI) * 360 / (2*Math::PI))
+      diff = Math.abs(@angle-target_angle)
+      target_angle_v = 0
+      if Math.abs(diff) > 10
+        if(diff < 180)
+          target_angle_v = if target_angle > @angle then @@ANGLE_SPEED_MAX else -@@ANGLE_SPEED_MAX end
+        else
+          target_angle_v = if target_angle > @angle then -@@ANGLE_SPEED_MAX else @@ANGLE_SPEED_MAX end
+        end
+      end
+      if (Math.abs(diff) < 30)
+        target_angle_v *= Math.abs(diff) / 45.0
+      end
+      steering_v = Math.clamp(-@@ANGLE_FORCE_MAX, target_angle_v - @v_angle, @@ANGLE_FORCE_MAX)
+      @v_angle += steering_v
+      
+      #move forward, but arrive
+      angleR = (@angle-90)*2*Math::PI/360.0
+      target_v = Vector.new(Math.sin(angleR), Math.cos(angleR))
+      distance_to_target = @target_pos.distance(@position)
+      if(distance_to_target > 70)
+        target_v *= @speed / 2.0
+      else
+        target_v *= @speed / 2.0 * distance_to_target / 70
+      end
+      if @caution && target_v.mag > @@CAUTION_SPEED_MAX
+        target_v = target_v.normalize * @@CAUTION_SPEED_MAX
+      end
+      steering_dir = target_v - @velocity
+      if steering_dir.mag > @@ACCEL_MAX
+        steering_dir = steering_dir.normalize * @@ACCEL_MAX
+      end
+      @velocity += steering_dir
+    else
+      #if we have no target, brakes on top of drag
+      @v_angle *= 0.9
+      @velocity *= 0.9
+    end
+  end
+  
+  #Can probably use this for spinies and blobs.  Keeping around for now.
+  def pureSteering
     if @target_pos != nil
       #echoln("Current Position: #{@position.x.round(3)}, #{@position.y.round(3)}")
       #echoln("Target Position:  #{@target_pos.x.round(3)}, #{@target_pos.y.round(3)}")
       target_v = @target_pos - @position
       target_v.normalize!
-      target_v *= @speed
+      distance_to_target = @target_pos.distance(@position)
+      if(distance_to_target > 70)
+        target_v *= @speed / 2.0
+      else
+        target_v *= @speed / 2.0 * distance_to_target / 70
+      end
       #echoln("Target Velocity: #{target_v.x.round(3)}, #{target_v.y.round(3)}")
       steering_dir = target_v - @velocity
-      steering_dir.normalize!
+      #force forward motion at all times
+      angleR = (@angle-90)*2*Math::PI/360.0
+      steering_dir += Vector.new(Math.sin(angleR), Math.cos(angleR)) * steering_dir.mag / 4
       #echoln("Steering Vector: #{steering_dir.x.round(3)}, #{steering_dir.y.round(3)}")
-      @velocity += steering_dir * @speed / 30.0
+      @velocity += steering_dir
       #echoln("Velocity: #{@velocity.x.round(3)}, #{@velocity.y.round(3)}")
+    else
+      #if we have no target, brakes on top of drag
+      @velocity *= 0.9
     end
     #just make angle match current velocity
     if @velocity.mag != 0
       target_angle = 360 - ((@velocity.angleR + Math::PI) * 360 / (2*Math::PI))
       diff = Math.abs(@angle-target_angle)
-      angle_accel = 0
+      target_angle_v = 0
       if Math.abs(diff) > 10
         if(diff < 180)
-          angle_accel = if target_angle > @angle then 1 else -1 end
+          target_angle_v = if target_angle > @angle then 1 else -1 end
         else
-          angle_accel = if target_angle > @angle then -1 else 1 end
+          target_angle_v = if target_angle > @angle then -1 else 1 end
         end
       end
-      @v_angle += angle_accel
+      if (Math.abs(diff) < 30)
+        target_angle_v *= Math.abs(diff) / 30.0
+      end
+      steering_dir_v = target_angle_v - @v_angle
+      steering_dir_v /= Math.abs(steering_dir_v) if steering_dir_v != 0
+      @v_angle += steering_dir_v
       
     end
-    #if we're super near the target, drop the target
-    if @target_pos != nil
-      if (@target_pos - @position).mag < 10
-        @target_pos = nil
+  end
+  
+  def randomSeek(seekScale = 40, forwardScale = 60, chance = 3)
+    if !@could_move || @target_pos == nil
+      if rand(100) < chance
+        #candidate = @position + Vector.new(rand(100)-rand(100), rand(100)-rand(100))
+        angleR = (@angle-90)*2*Math::PI/360.0
+        r1 = rand(2*seekScale) - seekScale
+        r2 = rand(2*seekScale) - seekScale
+        #try something in front-ish
+        candidate = @position + Vector.new(r1 + forwardScale*Math.sin(angleR), r2 + forwardScale*Math.cos(angleR))
+        if canMoveToV(candidate)
+          setTarget(candidate)
+          return
+        else
+          #back-ish?
+          candidate = candidate = @position + Vector.new(r1 - forwardScale*Math.sin(angleR), r2 - forwardScale*Math.cos(angleR))
+        end
+        if canMoveToV(candidate)
+          setTarget(candidate)
+          return
+        else
+          #totally random
+          candidate = candidate = @position + Vector.new(r1*3, r2*3)
+        end
+        if canMoveToV(candidate)
+          setTarget(candidate)
+          return
+        end
       end
     end
   end
   
-  def randomSeek()
-    if !@could_move || @target_pos == nil
-      if rand(100) < 5
-        @target_pos = @position + Vector.new(rand(100)-rand(100), rand(100)-rand(100))
-      end
+  def setTarget(pos)
+    if(@stun <= 0 || pos.nil?)
+      @target_pos = pos
+      @seekingBobber = false
+      @target_time = -1
     end
   end
 end
@@ -185,9 +449,10 @@ class FP_Bobber < FP_Entity
   CATCHING = 2
   
   attr_reader :state
+  attr_reader :velocity
   
   @@ACCELERATION = 0.4
-  @@DRAG = 0.93
+  @@DRAG = 0.8
   
   def initialize(shape, speed)
     super(shape, speed)
@@ -195,10 +460,12 @@ class FP_Bobber < FP_Entity
     @velocity = Vector.new(0, 0)
     @angle = 0
     @maxSpeed2 = @speed * @speed
+    @fish = nil
+    @tapTime = 40
+    @@dipAnimBitmap = Bitmap.new("Graphics/FishingPlus/bobber_animation")
   end
   
   def tick()
-  
     #Apply drag
     @velocity *= @@DRAG
     if @velocity.mag2 < 0.03
@@ -233,6 +500,13 @@ class FP_Bobber < FP_Entity
       end
     end
     
+    #update everything for tapping
+    if @tapTime < 40
+      @sprite.bitmap.clear()
+      @sprite.bitmap.blt(0, 0, @@dipAnimBitmap, Rect.new(@tapTime/2 * 16, 0, 16, 16))
+      @tapTime += 1
+    end
+    
     ##update position for real
     super()
     
@@ -247,6 +521,54 @@ class FP_Bobber < FP_Entity
     end
     
     return false
+  end
+  
+  def setFish(fish)
+    @fish = fish
+  end
+  
+  def hasFish()
+    return !@fish.nil?
+  end
+  
+  def fishTap()
+    @tapTime = 0
+    pbSEPlay("Voltorb Flip explosion") #TODO get a better dip sound lol
+  end
+  
+end
+
+module FP_Angle_Adjustors
+  class NoOp
+    def initialize()
+    end
+    def adjust(sprite, velocity)
+    end
+  end
+  class RandomSlow < NoOp
+    def initialize()
+      @adjustment = 0
+      @vel = 0
+    end
+    def adjust(sprite, velocity)
+      @vel += (rand()-0.5)
+      @vel *= 0.85
+      if Math.abs(@vel) > 3
+        @vel = 3 * @vel / Math.abs(@vel)
+      end
+      @adjustment += @vel
+      sprite.angle += @adjustment
+    end
+  end
+  class Oscillate < NoOp
+    def initialize(speed)
+      @time = 0
+      @speed = speed * 0.05
+    end
+    def adjust(sprite, velocity)
+      @time += @speed * velocity.mag
+      sprite.angle += Math.sin(@time) * 15
+    end
   end
 end
 
@@ -338,20 +660,42 @@ def fishingPlus(fishCount)
   
   fish.each do |f|
     f.bobber = bobber
+    f.setOtherFish(fish)
+    f.angle = rand(360)
+    f.randomSeek(40,60,100)
   end
     
   loop do
     Graphics.update
     Input.update
+    bobber.tick()
     fish.each do |f|
       f.tick()
+      if f.hooked
+        bobber.setFish(f)
+      end
     end
-    if bobber.tick()
-      break # for now, just end it on second A press
+    if bobber.hasFish
+      break
     end
   end
   
+  #remove all the fish
   fish.each {|f| f.die()}
+
+  catchResult = 0
+
+  loop do
+    Graphics.update
+    Input.update
+    catchResult = bobber.tick()
+    if catchResult
+      break
+    end
+  end
+  
+  #TODO handle catch result
+  
   bobber.die()
   
   #Sprite stuff cleanup
